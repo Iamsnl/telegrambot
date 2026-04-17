@@ -12,8 +12,9 @@ if (!process.env.BOT_TOKEN) {
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// Create LocalSession for an ultra-fast temporary cart DB
-const localSession = new LocalSession({ database: 'session_db.json' });
+// Create LocalSession using pure RAM memory for ultra-fast performance on an 8GB VPS
+// This entirely eliminates disk I/O latency, making the bot incredibly responsive
+const localSession = new LocalSession({ storage: LocalSession.storageMemory });
 bot.use(localSession.middleware());
 
 // Inject prisma into ctx
