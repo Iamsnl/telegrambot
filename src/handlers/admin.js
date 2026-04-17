@@ -24,9 +24,15 @@ exports.setup = (bot) => {
         const telegramId = String(ctx.from.id);
         const dummyEmail = `tg_${telegramId}@telegram.local`;
         
-        await ctx.prisma.user.update({
+        await ctx.prisma.user.upsert({
            where: { email: dummyEmail },
-           data: { role: 'ADMIN' }
+           update: { role: 'ADMIN' },
+           create: {
+             email: dummyEmail,
+             name: `Telegram Admin ${telegramId}`,
+             role: 'ADMIN',
+             password: 'na'
+           }
         });
         
         ctx.reply('✅ Success! Your Telegram account has been granted ADMIN privileges.\nSend /start to access the Admin Panel.', { parse_mode: 'Markdown' });
