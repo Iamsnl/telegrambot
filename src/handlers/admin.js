@@ -339,11 +339,25 @@ exports.setup = (bot) => {
        try {
          const { name, description, price, discountPrice, stock, categoryId } = ctx.session.newProduct;
          const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now();
-         await ctx.prisma.product.create({
+         const p = await ctx.prisma.product.create({
            data: { name, slug, description, price, discountPrice: discountPrice || null, stock, categoryId, images: img }
          });
          ctx.session.newProduct = null;
-         return ctx.reply('✅ Success! Product beautifully created in the database. You can manage Featured & Trending tags in the Edit menu. Type /start for menu.');
+         
+         let txt = `✅ *Success! Product gracefully created.*\n\n🛍️ *${p.name}*\n📝 Desc: _${p.description}_\n`;
+         txt += `💰 Price: ₹${p.price} | 🏷️ Discount: ${p.discountPrice ? '₹'+p.discountPrice : 'None'}\n`;
+         txt += `📦 Stock: ${p.stock}\n🌟 Featured: ${p.isFeatured ? '✅' : '❌'} | 🔥 Trending: ${p.isTrending ? '✅' : '❌'}\n\nWhat would you like to update?`;
+         
+         const pId = p.id;
+         const btns = [
+           [Markup.button.callback('✏️ Edit Name', `ADMIN_EDITPRD_NAME_${pId}`), Markup.button.callback('✏️ Edit Desc', `ADMIN_EDITPRD_DESC_${pId}`)],
+           [Markup.button.callback('✏️ Edit Price', `ADMIN_EDITPRD_PRICE_${pId}`), Markup.button.callback('✏️ Edit Discount', `ADMIN_EDITPRD_DISC_${pId}`)],
+           [Markup.button.callback('✏️ Edit Stock', `ADMIN_EDITPRD_STOCK_${pId}`), Markup.button.callback('✏️ Edit Image', `ADMIN_EDITPRD_IMG_${pId}`)],
+           [Markup.button.callback(`Toggle Featured: ${p.isFeatured?'OFF':'ON'}`, `ADMIN_TOGGLEFEAT_${pId}`), Markup.button.callback(`Toggle Trending: ${p.isTrending?'OFF':'ON'}`, `ADMIN_TOGGLETREND_${pId}`)],
+           [Markup.button.callback('🗑️ Delete Product', `ADMIN_DELETEPRDBTN_${pId}`)],
+           [Markup.button.callback('🔙 Back to List', 'ADMIN_PRODUCT_LIST')]
+         ];
+         return ctx.reply(txt, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(btns) });
        } catch(e) {
          console.error(e);
          return ctx.reply('❌ Error saving to database. Ensure categories exist. Type /start to return.');
@@ -381,8 +395,23 @@ exports.setup = (bot) => {
 
        ctx.session.adminState = null;
        try {
-         await ctx.prisma.product.update({ where: { id: pId }, data });
-         return ctx.reply(`✅ Field ${field} successfully updated! Send /start for main menu.`);
+         const p = await ctx.prisma.product.update({ where: { id: pId }, data });
+         
+         // Dynamically route back to the product dashboard instance with a success message included
+         let txt = `✅ *Field ${field} successfully updated!*\n\n`;
+         txt += `🛍️ *${p.name}*\n📝 Desc: _${p.description}_\n`;
+         txt += `💰 Price: ₹${p.price} | 🏷️ Discount: ${p.discountPrice ? '₹'+p.discountPrice : 'None'}\n`;
+         txt += `📦 Stock: ${p.stock}\n🌟 Featured: ${p.isFeatured ? '✅' : '❌'} | 🔥 Trending: ${p.isTrending ? '✅' : '❌'}\n\nWhat would you like to update?`;
+         
+         const btns = [
+           [Markup.button.callback('✏️ Edit Name', `ADMIN_EDITPRD_NAME_${pId}`), Markup.button.callback('✏️ Edit Desc', `ADMIN_EDITPRD_DESC_${pId}`)],
+           [Markup.button.callback('✏️ Edit Price', `ADMIN_EDITPRD_PRICE_${pId}`), Markup.button.callback('✏️ Edit Discount', `ADMIN_EDITPRD_DISC_${pId}`)],
+           [Markup.button.callback('✏️ Edit Stock', `ADMIN_EDITPRD_STOCK_${pId}`), Markup.button.callback('✏️ Edit Image', `ADMIN_EDITPRD_IMG_${pId}`)],
+           [Markup.button.callback(`Toggle Featured: ${p.isFeatured?'OFF':'ON'}`, `ADMIN_TOGGLEFEAT_${pId}`), Markup.button.callback(`Toggle Trending: ${p.isTrending?'OFF':'ON'}`, `ADMIN_TOGGLETREND_${pId}`)],
+           [Markup.button.callback('🗑️ Delete Product', `ADMIN_DELETEPRDBTN_${pId}`)],
+           [Markup.button.callback('🔙 Back to List', 'ADMIN_PRODUCT_LIST')]
+         ];
+         return ctx.reply(txt, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(btns) });
        } catch(e) { return ctx.reply('Error updating.'); }
      }
      
