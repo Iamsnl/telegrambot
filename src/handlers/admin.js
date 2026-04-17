@@ -202,9 +202,15 @@ exports.setup = (bot) => {
        const p = await ctx.prisma.product.findUnique({ where: { id: pId }});
        if(!p) return ctx.answerCbQuery('Not found.');
        
-       const txt = `🛍️ *${p.name}*\n💰 Price: ₹${p.price}\n📦 Stock: ${p.stock}\n\nWhat would you like to update?`;
+       let txt = `🛍️ *${p.name}*\n📝 Desc: _${p.description}_\n`;
+       txt += `💰 Price: ₹${p.price} | 🏷️ Discount: ${p.discountPrice ? '₹'+p.discountPrice : 'None'}\n`;
+       txt += `📦 Stock: ${p.stock}\n🌟 Featured: ${p.isFeatured ? '✅' : '❌'} | 🔥 Trending: ${p.isTrending ? '✅' : '❌'}\n\nWhat would you like to update?`;
+       
        const btns = [
-         [Markup.button.callback('✏️ Update Price', `ADMIN_EDITPRICE_${pId}`), Markup.button.callback('✏️ Update Stock', `ADMIN_EDITSTOCK_${pId}`)],
+         [Markup.button.callback('✏️ Edit Name', `ADMIN_EDITPRD_NAME_${pId}`), Markup.button.callback('✏️ Edit Desc', `ADMIN_EDITPRD_DESC_${pId}`)],
+         [Markup.button.callback('✏️ Edit Price', `ADMIN_EDITPRD_PRICE_${pId}`), Markup.button.callback('✏️ Edit Discount', `ADMIN_EDITPRD_DISC_${pId}`)],
+         [Markup.button.callback('✏️ Edit Stock', `ADMIN_EDITPRD_STOCK_${pId}`), Markup.button.callback('✏️ Edit Image', `ADMIN_EDITPRD_IMG_${pId}`)],
+         [Markup.button.callback(`Toggle Featured: ${p.isFeatured?'OFF':'ON'}`, `ADMIN_TOGGLEFEAT_${pId}`), Markup.button.callback(`Toggle Trending: ${p.isTrending?'OFF':'ON'}`, `ADMIN_TOGGLETREND_${pId}`)],
          [Markup.button.callback('🗑️ Delete Product', `ADMIN_DELETEPRDBTN_${pId}`)],
          [Markup.button.callback('🔙 Back to List', 'ADMIN_PRODUCT_LIST')]
        ];
@@ -212,16 +218,27 @@ exports.setup = (bot) => {
      } catch (e){}
   });
 
-  bot.action(/^ADMIN_EDITPRICE_(.+)$/, async (ctx) => {
-     ctx.session.editProductId = ctx.match[1];
-     ctx.session.adminState = 'waitingForEditPrice';
-     await ctx.editMessageText('Send the **new Price** (numbers only):\n\n_Send /cancel to abort._', { parse_mode: 'Markdown' });
+  bot.action(/^ADMIN_EDITPRD_(.+)_(.+)$/, async (ctx) => {
+     const field = ctx.match[1]; // NAME, DESC, PRICE, DISC, STOCK, IMG
+     const pId = ctx.match[2];
+     ctx.session.editProductId = pId;
+     ctx.session.adminState = `waitingForEdit_${field}`;
+     await ctx.editMessageText(`Send the new value for **${field}**:\n\n_Send /cancel to abort._`, { parse_mode: 'Markdown' });
   });
 
-  bot.action(/^ADMIN_EDITSTOCK_(.+)$/, async (ctx) => {
-     ctx.session.editProductId = ctx.match[1];
-     ctx.session.adminState = 'waitingForEditStock';
-     await ctx.editMessageText('Send the **new Stock amount** (numbers only):\n\n_Send /cancel to abort._', { parse_mode: 'Markdown' });
+  bot.action(/^ADMIN_TOGGLE(.*)_(.+)$/, async (ctx) => {
+     const toggleType = ctx.match[1]; // FEAT, TREND
+     const pId = ctx.match[2];
+     try {
+       const p = await ctx.prisma.product.findUnique({ where: { id: pId }});
+       if(toggleType === 'FEAT') await ctx.prisma.product.update({ where: { id: pId }, data: { isFeatured: !p.isFeatured }});
+       if(toggleType === 'TREND') await ctx.prisma.product.update({ where: { id: pId }, data: { isTrending: !p.isTrending }});
+       
+       ctx.answerCbQuery('✅ Toggled successfully!');
+       // Refresh via self-trigger
+       ctx.match = [null, pId];
+       bot.handleUpdate({ update_id: ctx.update.update_id, callback_query: { ...ctx.callbackQuery, data: `ADMIN_MANAGEPRD_${pId}` }});
+     } catch(e) { ctx.answerCbQuery('Error toggling state'); }
   });
 
   bot.action(/^ADMIN_DELETEPRDBTN_(.+)$/, async (ctx) => {
@@ -293,8 +310,18 @@ exports.setup = (bot) => {
        const price = parseFloat(txt);
        if(isNaN(price)) return ctx.reply('❌ Invalid number. Please enter a valid Price (e.g., 299):');
        ctx.session.newProduct.price = price;
+       ctx.session.adminState = 'waitingForProductDiscPrice';
+       return ctx.reply('Step 5: Enter the *Discount Price* (e.g., 199), or type `skip` if there is no discount.', { parse_mode: 'Markdown' });
+     }
+
+     if(state === 'waitingForProductDiscPrice') {
+       if (txt.toLowerCase() !== 'skip') {
+         const disc = parseFloat(txt);
+         if(isNaN(disc)) return ctx.reply('❌ Invalid number. Please enter a valid Discount Price, or `skip`:');
+         ctx.session.newProduct.discountPrice = disc;
+       }
        ctx.session.adminState = 'waitingForProductStock';
-       return ctx.reply('Step 5: Enter the initial *Stock* quantity (e.g., 50).', { parse_mode: 'Markdown' });
+       return ctx.reply('Step 6: Enter the initial *Stock* quantity (e.g., 50).', { parse_mode: 'Markdown' });
      }
      
      if(state === 'waitingForProductStock') {
@@ -310,36 +337,52 @@ exports.setup = (bot) => {
        const img = txt.toLowerCase() === 'skip' ? '["/placeholder.png"]' : JSON.stringify([txt]);
        
        try {
-         const { name, description, price, stock, categoryId } = ctx.session.newProduct;
+         const { name, description, price, discountPrice, stock, categoryId } = ctx.session.newProduct;
          const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now();
          await ctx.prisma.product.create({
-           data: { name, slug, description, price, stock, categoryId, images: img }
+           data: { name, slug, description, price, discountPrice: discountPrice || null, stock, categoryId, images: img }
          });
          ctx.session.newProduct = null;
-         return ctx.reply('✅ Success! Product beautifully created in the database. Users can now buy it immediately! Type /start for menu.');
+         return ctx.reply('✅ Success! Product beautifully created in the database. You can manage Featured & Trending tags in the Edit menu. Type /start for menu.');
        } catch(e) {
          console.error(e);
          return ctx.reply('❌ Error saving to database. Ensure categories exist. Type /start to return.');
        }
      }
 
-     if(state === 'waitingForEditPrice') {
-       const price = parseFloat(txt);
-       if(isNaN(price)) return ctx.reply('❌ Invalid number. Please enter a valid Price:');
-       ctx.session.adminState = null;
-       try {
-         await ctx.prisma.product.update({ where: { id: ctx.session.editProductId }, data: { price }});
-         return ctx.reply('✅ Price updated! Send /start for main menu.');
-       } catch(e) { return ctx.reply('Error updating.'); }
-     }
+     if(state && state.startsWith('waitingForEdit_')) {
+       const field = state.split('_')[1];
+       const pId = ctx.session.editProductId;
+       let data = {};
+       
+       if (field === 'NAME') { data.name = txt; data.slug = txt.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now(); }
+       else if (field === 'DESC') data.description = txt;
+       else if (field === 'PRICE') {
+          const val = parseFloat(txt);
+          if(isNaN(val)) return ctx.reply('❌ Invalid number.');
+          data.price = val;
+       }
+       else if (field === 'DISC') {
+          if (txt.toLowerCase() === 'none' || txt.toLowerCase() === 'skip') data.discountPrice = null;
+          else {
+            const val = parseFloat(txt);
+            if(isNaN(val)) return ctx.reply('❌ Invalid number.');
+            data.discountPrice = val;
+          }
+       }
+       else if (field === 'STOCK') {
+          const val = parseInt(txt);
+          if(isNaN(val)) return ctx.reply('❌ Invalid number.');
+          data.stock = val;
+       }
+       else if (field === 'IMG') {
+          data.images = txt.toLowerCase() === 'skip' ? '["/placeholder.png"]' : JSON.stringify([txt]);
+       }
 
-     if(state === 'waitingForEditStock') {
-       const stock = parseInt(txt);
-       if(isNaN(stock)) return ctx.reply('❌ Invalid number. Please enter a valid Stock:');
        ctx.session.adminState = null;
        try {
-         await ctx.prisma.product.update({ where: { id: ctx.session.editProductId }, data: { stock }});
-         return ctx.reply('✅ Stock updated! Send /start for main menu.');
+         await ctx.prisma.product.update({ where: { id: pId }, data });
+         return ctx.reply(`✅ Field ${field} successfully updated! Send /start for main menu.`);
        } catch(e) { return ctx.reply('Error updating.'); }
      }
      
