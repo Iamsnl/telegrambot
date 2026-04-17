@@ -1,5 +1,7 @@
 const { Markup } = require('telegraf');
 const bcrypt = require('bcryptjs');
+const fs = require('fs/promises');
+const path = require('path');
 
 exports.setup = (bot) => {
   bot.command('adminlogin', async (ctx) => {
@@ -223,7 +225,12 @@ exports.setup = (bot) => {
      const pId = ctx.match[2];
      ctx.session.editProductId = pId;
      ctx.session.adminState = `waitingForEdit_${field}`;
-     await ctx.editMessageText(`Send the new value for **${field}**:\n\n_Send /cancel to abort._`, { parse_mode: 'Markdown' });
+     
+     const promptMsg = field === 'IMG' 
+       ? `Upload a new **Photo** or send a **Direct Image URL**:\n\n_Send /cancel to abort._`
+       : `Send the new value for **${field}**:\n\n_Send /cancel to abort._`;
+       
+     await ctx.editMessageText(promptMsg, { parse_mode: 'Markdown' });
   });
 
   bot.action(/^ADMIN_TOGGLE(.*)_(.+)$/, async (ctx) => {
@@ -264,9 +271,44 @@ exports.setup = (bot) => {
     await ctx.editMessageText('📢 *Global Broadcast System*\n\nPlease type the message you want to blast to **ALL** users who have activated the bot. \n\n_Send /cancel to safely abort._', { parse_mode: 'Markdown' });
   });
 
-  bot.on('text', async (ctx, next) => {
-     const txt = ctx.message.text;
+  bot.on(['text', 'photo'], async (ctx, next) => {
+     let txt = ctx.message.text || '';
      const state = ctx.session.adminState;
+
+     if(ctx.message.photo) {
+        const photo = ctx.message.photo[ctx.message.photo.length - 1];
+        const file = await ctx.telegram.getFile(photo.file_id);
+        const photoUrl = `https://api.telegram.org/file/bot${ctx.telegram.token}/${file.file_path}`;
+        
+        try {
+          const response = await fetch(photoUrl);
+          const buffer = await response.arrayBuffer();
+          const ext = file.file_path.split('.').pop() || 'jpg';
+          const filename = `${Date.now()}-telegram-upload.${ext}`;
+          // Use the domain API to store the image instead of writing horizontally to disk.
+          // This allows the Telegram bot and the Next.js app to be hosted on completely different servers!
+          const STORE_URL = process.env.STORE_URL || 'http://localhost:3000';
+          
+          const formData = new FormData();
+          // We wrap the buffer in a natively supported Blob to emulate browser upload
+          formData.append('file', new Blob([buffer]), filename);
+          
+          const uploadRes = await fetch(`${STORE_URL}/api/upload`, {
+             method: 'POST',
+             body: formData
+          });
+          
+          const uploadData = await uploadRes.json();
+          if (uploadData.success && uploadData.url) {
+             txt = uploadData.url;
+          } else {
+             throw new Error(uploadData.error || "Upload failed");
+          }
+        } catch(err) {
+          console.error("Photo download error", err);
+          return ctx.reply("❌ Error downloading your photo. Please try a valid Direct Image URL instead.");
+        }
+     }
 
      if(txt === '/cancel' && (ctx.session.waitingForBroadcast || state)) {
         ctx.session.waitingForBroadcast = false;
@@ -329,7 +371,7 @@ exports.setup = (bot) => {
        if(isNaN(stock)) return ctx.reply('❌ Invalid number. Please enter a valid Stock (e.g., 50):');
        ctx.session.newProduct.stock = stock;
        ctx.session.adminState = 'waitingForProductImg';
-       return ctx.reply('Last Step: Send a valid **Direct Image URL** (starting with http), or type `skip` to use a default placeholder.', { parse_mode: 'Markdown' });
+       return ctx.reply('Last Step: Send a **Direct Image URL** OR simply upload a **Photo** now. Type `skip` to use a placeholder.', { parse_mode: 'Markdown' });
      }
      
      if(state === 'waitingForProductImg') {
