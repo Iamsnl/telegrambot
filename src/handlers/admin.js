@@ -46,6 +46,7 @@ exports.setup = (bot) => {
            [Markup.button.callback('📊 Store Statistics', 'ADMIN_STATS')],
            [Markup.button.callback('📦 Manage Orders (All)', 'ADMIN_ORDERS')],
            [Markup.button.callback('📢 Global Push Broadcast', 'ADMIN_BROADCAST')],
+           [Markup.button.callback('🛍️ Manage Products', 'ADMIN_PRODUCTS')],
            [Markup.button.callback('🔙 Exit Admin Mode', 'MAIN_MENU')]
         ])
      });
@@ -155,38 +156,191 @@ exports.setup = (bot) => {
      } catch(e){ ctx.answerCbQuery('Error mutating status.'); }
   });
 
+  bot.action('ADMIN_PRODUCTS', async (ctx) => {
+     await ctx.editMessageText('🛍️ *Manage Products Dashboard*\nChoose an action:', {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+           [Markup.button.callback('➕ Add New Product', 'ADMIN_PRODUCT_ADD')],
+           [Markup.button.callback('📋 Edit/Delete Existing', 'ADMIN_PRODUCT_LIST')],
+           [Markup.button.callback('🔙 Back to Dashboard', 'ADMIN_PANEL')]
+        ])
+     });
+  });
+
+  bot.action('ADMIN_PRODUCT_ADD', async (ctx) => {
+     try {
+       const categories = await ctx.prisma.category.findMany();
+       if (categories.length === 0) {
+          return ctx.answerCbQuery('❌ You must create at least one Category in the Web Admin Panel first!', { show_alert: true });
+       }
+       const buttons = categories.map(c => [Markup.button.callback(c.name, `ADMIN_ADDPRD_CAT_${c.id}`)]);
+       buttons.push([Markup.button.callback('🔙 Cancel Add Product', 'ADMIN_PRODUCTS')]);
+       await ctx.editMessageText('Step 1: Select a Category for the new product:', Markup.inlineKeyboard(buttons));
+     } catch (e) {}
+  });
+
+  bot.action(/^ADMIN_ADDPRD_CAT_(.+)$/, async (ctx) => {
+     ctx.session.newProduct = { categoryId: ctx.match[1] };
+     ctx.session.adminState = 'waitingForProductName';
+     await ctx.editMessageText('Step 2: Enter the *Name* of the product.\n\n_Send /cancel to abort._', { parse_mode: 'Markdown' });
+  });
+
+  bot.action('ADMIN_PRODUCT_LIST', async (ctx) => {
+     try {
+       const products = await ctx.prisma.product.findMany({ orderBy: { createdAt: 'desc' }, take: 25 });
+       if (products.length === 0) return ctx.editMessageText('No products found.', Markup.inlineKeyboard([[Markup.button.callback('🔙 Back', 'ADMIN_PRODUCTS')]]));
+       
+       const buttons = products.map(p => [Markup.button.callback(`${p.name} - ₹${p.price}`, `ADMIN_MANAGEPRD_${p.id}`)]);
+       buttons.push([Markup.button.callback('🔙 Back', 'ADMIN_PRODUCTS')]);
+       await ctx.editMessageText('📋 Select a product to edit or delete (Showing latest 25):', Markup.inlineKeyboard(buttons));
+     } catch (e) {}
+  });
+
+  bot.action(/^ADMIN_MANAGEPRD_(.+)$/, async (ctx) => {
+     const pId = ctx.match[1];
+     try {
+       const p = await ctx.prisma.product.findUnique({ where: { id: pId }});
+       if(!p) return ctx.answerCbQuery('Not found.');
+       
+       const txt = `🛍️ *${p.name}*\n💰 Price: ₹${p.price}\n📦 Stock: ${p.stock}\n\nWhat would you like to update?`;
+       const btns = [
+         [Markup.button.callback('✏️ Update Price', `ADMIN_EDITPRICE_${pId}`), Markup.button.callback('✏️ Update Stock', `ADMIN_EDITSTOCK_${pId}`)],
+         [Markup.button.callback('🗑️ Delete Product', `ADMIN_DELETEPRDBTN_${pId}`)],
+         [Markup.button.callback('🔙 Back to List', 'ADMIN_PRODUCT_LIST')]
+       ];
+       await ctx.editMessageText(txt, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(btns) });
+     } catch (e){}
+  });
+
+  bot.action(/^ADMIN_EDITPRICE_(.+)$/, async (ctx) => {
+     ctx.session.editProductId = ctx.match[1];
+     ctx.session.adminState = 'waitingForEditPrice';
+     await ctx.editMessageText('Send the **new Price** (numbers only):\n\n_Send /cancel to abort._', { parse_mode: 'Markdown' });
+  });
+
+  bot.action(/^ADMIN_EDITSTOCK_(.+)$/, async (ctx) => {
+     ctx.session.editProductId = ctx.match[1];
+     ctx.session.adminState = 'waitingForEditStock';
+     await ctx.editMessageText('Send the **new Stock amount** (numbers only):\n\n_Send /cancel to abort._', { parse_mode: 'Markdown' });
+  });
+
+  bot.action(/^ADMIN_DELETEPRDBTN_(.+)$/, async (ctx) => {
+     const btns = [
+       [Markup.button.callback('⚠️ YES, DELETE', `ADMIN_DELETEPRDCONFIRM_${ctx.match[1]}`)],
+       [Markup.button.callback('❌ NO, CANCEL', `ADMIN_MANAGEPRD_${ctx.match[1]}`)]
+     ];
+     await ctx.editMessageText('⚠️ Are you completely sure you want to delete this product? This cannot be undone!', Markup.inlineKeyboard(btns));
+  });
+
+  bot.action(/^ADMIN_DELETEPRDCONFIRM_(.+)$/, async (ctx) => {
+     try {
+       await ctx.prisma.product.delete({ where: { id: ctx.match[1] }});
+       await ctx.answerCbQuery('✅ Product manually deleted from database!');
+       // Route back to list using handleUpdate fallback
+       ctx.match = null;
+       bot.handleUpdate({ update_id: ctx.update.update_id, callback_query: { ...ctx.callbackQuery, data: 'ADMIN_PRODUCT_LIST' }});
+     } catch(e) { ctx.answerCbQuery('Error deleting product.'); }
+  });
+
   bot.action('ADMIN_BROADCAST', async (ctx) => {
     ctx.session.waitingForBroadcast = true;
     await ctx.editMessageText('📢 *Global Broadcast System*\n\nPlease type the message you want to blast to **ALL** users who have activated the bot. \n\n_Send /cancel to safely abort._', { parse_mode: 'Markdown' });
   });
 
   bot.on('text', async (ctx, next) => {
-     if(ctx.message.text === '/cancel' && ctx.session.waitingForBroadcast) {
+     const txt = ctx.message.text;
+     const state = ctx.session.adminState;
+
+     if(txt === '/cancel' && (ctx.session.waitingForBroadcast || state)) {
         ctx.session.waitingForBroadcast = false;
-        return ctx.reply('✅ Broadcast aborted. Type /start to drop back into the menu.');
+        ctx.session.adminState = null;
+        ctx.session.newProduct = null;
+        return ctx.reply('✅ Action safely cancelled. Type /start to drop back into the menu.');
      }
      
      if(ctx.session.waitingForBroadcast) {
        ctx.session.waitingForBroadcast = false;
-       const msg = ctx.message.text;
        try {
          const users = await ctx.prisma.user.findMany({ where: { email: { startsWith: 'tg_' } } });
          let count = 0;
          for (const u of users) {
             const m = u.email.match(/^tg_(.+)@telegram\.local$/);
             if (m) {
-               const chatId = m[1];
                try {
-                 await bot.telegram.sendMessage(chatId, `📢 *Store Update:*\n\n${msg}`, { parse_mode: 'Markdown' });
+                 await bot.telegram.sendMessage(m[1], `📢 *Store Update:*\n\n${txt}`, { parse_mode: 'Markdown' });
                  count++;
-               } catch(ex) { /* Do not crash if user blocked bot */ }
+               } catch(ex) {}
             }
          }
-         ctx.reply(`✅ Massive success. Signal broadcast sent to ${count} active telegram user channels! Type /start to return.`, { parse_mode: 'Markdown' });
+         ctx.reply(`✅ Broadcast sent to ${count} users! Type /start to return.`, { parse_mode: 'Markdown' });
+       } catch(e) { ctx.reply('Error sending broadcast.'); }
+       return;
+     }
+
+     if(state === 'waitingForProductName') {
+       ctx.session.newProduct.name = txt;
+       ctx.session.adminState = 'waitingForProductDesc';
+       return ctx.reply('Step 3: Great! Now enter a short *Description* for the item.', { parse_mode: 'Markdown' });
+     }
+     
+     if(state === 'waitingForProductDesc') {
+       ctx.session.newProduct.description = txt;
+       ctx.session.adminState = 'waitingForProductPrice';
+       return ctx.reply('Step 4: Enter the *Price* (just the number, e.g., 299).', { parse_mode: 'Markdown' });
+     }
+     
+     if(state === 'waitingForProductPrice') {
+       const price = parseFloat(txt);
+       if(isNaN(price)) return ctx.reply('❌ Invalid number. Please enter a valid Price (e.g., 299):');
+       ctx.session.newProduct.price = price;
+       ctx.session.adminState = 'waitingForProductStock';
+       return ctx.reply('Step 5: Enter the initial *Stock* quantity (e.g., 50).', { parse_mode: 'Markdown' });
+     }
+     
+     if(state === 'waitingForProductStock') {
+       const stock = parseInt(txt);
+       if(isNaN(stock)) return ctx.reply('❌ Invalid number. Please enter a valid Stock (e.g., 50):');
+       ctx.session.newProduct.stock = stock;
+       ctx.session.adminState = 'waitingForProductImg';
+       return ctx.reply('Last Step: Send a valid **Direct Image URL** (starting with http), or type `skip` to use a default placeholder.', { parse_mode: 'Markdown' });
+     }
+     
+     if(state === 'waitingForProductImg') {
+       ctx.session.adminState = null;
+       const img = txt.toLowerCase() === 'skip' ? '["/placeholder.png"]' : JSON.stringify([txt]);
+       
+       try {
+         const { name, description, price, stock, categoryId } = ctx.session.newProduct;
+         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now();
+         await ctx.prisma.product.create({
+           data: { name, slug, description, price, stock, categoryId, images: img }
+         });
+         ctx.session.newProduct = null;
+         return ctx.reply('✅ Success! Product beautifully created in the database. Users can now buy it immediately! Type /start for menu.');
        } catch(e) {
-         ctx.reply('Transmission error sending broadcast.');
+         console.error(e);
+         return ctx.reply('❌ Error saving to database. Ensure categories exist. Type /start to return.');
        }
-       return; // Stop propagating since we handled the explicit wait
+     }
+
+     if(state === 'waitingForEditPrice') {
+       const price = parseFloat(txt);
+       if(isNaN(price)) return ctx.reply('❌ Invalid number. Please enter a valid Price:');
+       ctx.session.adminState = null;
+       try {
+         await ctx.prisma.product.update({ where: { id: ctx.session.editProductId }, data: { price }});
+         return ctx.reply('✅ Price updated! Send /start for main menu.');
+       } catch(e) { return ctx.reply('Error updating.'); }
+     }
+
+     if(state === 'waitingForEditStock') {
+       const stock = parseInt(txt);
+       if(isNaN(stock)) return ctx.reply('❌ Invalid number. Please enter a valid Stock:');
+       ctx.session.adminState = null;
+       try {
+         await ctx.prisma.product.update({ where: { id: ctx.session.editProductId }, data: { stock }});
+         return ctx.reply('✅ Stock updated! Send /start for main menu.');
+       } catch(e) { return ctx.reply('Error updating.'); }
      }
      
      return next();
