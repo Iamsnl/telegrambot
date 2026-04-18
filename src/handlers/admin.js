@@ -3,6 +3,19 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs/promises');
 const path = require('path');
 
+
+const adminCache = new Set();
+async function isAdminCheck(ctx) {
+   if (!ctx || !ctx.from || !ctx.from.id) return false;
+   const telegramId = String(ctx.from.id);
+   if (adminCache.has(telegramId)) return true;
+   try {
+     const user = await ctx.prisma.user.findUnique({ where: { email: `tg_${telegramId}@telegram.local` }});
+     if (user?.role === 'ADMIN') { adminCache.add(telegramId); return true; }
+   } catch(e) {}
+   return false;
+}
+
 exports.setup = (bot) => {
   bot.command('adminlogin', async (ctx) => {
      const args = ctx.message.text.split(' ');
@@ -35,6 +48,7 @@ exports.setup = (bot) => {
            }
         });
         
+        adminCache.add(telegramId);
         ctx.reply('✅ Success! Your Telegram account has been granted ADMIN privileges.\nSend /start to access the Admin Panel.', { parse_mode: 'Markdown' });
      } catch (e) {
         console.error("Admin Login Error:", e);
@@ -43,10 +57,8 @@ exports.setup = (bot) => {
   });
 
   bot.action('ADMIN_PANEL', async (ctx) => {
-     const telegramId = String(ctx.from.id);
-     const dummyEmail = `tg_${telegramId}@telegram.local`;
-     const user = await ctx.prisma.user.findUnique({ where: { email: dummyEmail }});
-     if (user?.role !== 'ADMIN') return ctx.answerCbQuery('Unauthorized', { show_alert: true });
+     ctx.answerCbQuery().catch(()=>{});
+     if (!(await isAdminCheck(ctx))) { try { await ctx.answerCbQuery('Unauthorized', { show_alert: true }); } catch(e){} return; }
      
      await ctx.editMessageText('🛡️ *Advanced Admin Dashboard*\nSelect an administration task below:', {
         parse_mode: 'Markdown',
@@ -61,10 +73,8 @@ exports.setup = (bot) => {
   });
 
   bot.action('ADMIN_STATS', async (ctx) => {
-     const telegramId = String(ctx.from.id);
-     const dummyEmail = `tg_${telegramId}@telegram.local`;
-     const user = await ctx.prisma.user.findUnique({ where: { email: dummyEmail }});
-     if (user?.role !== 'ADMIN') return;
+     ctx.answerCbQuery().catch(()=>{});
+     if (!(await isAdminCheck(ctx))) { try { await ctx.answerCbQuery('Unauthorized', { show_alert: true }); } catch(e){} return; }
      
      try {
        const userCount = await ctx.prisma.user.count();
@@ -84,10 +94,8 @@ exports.setup = (bot) => {
   });
 
   bot.action('ADMIN_ORDERS', async (ctx) => {
-     const telegramId = String(ctx.from.id);
-     const dummyEmail = `tg_${telegramId}@telegram.local`;
-     const user = await ctx.prisma.user.findUnique({ where: { email: dummyEmail }});
-     if (user?.role !== 'ADMIN') return;
+     ctx.answerCbQuery().catch(()=>{});
+     if (!(await isAdminCheck(ctx))) { try { await ctx.answerCbQuery('Unauthorized', { show_alert: true }); } catch(e){} return; }
      
      try {
        const recentOrders = await ctx.prisma.order.findMany({ 
@@ -110,6 +118,7 @@ exports.setup = (bot) => {
   });
 
   bot.action(/^ADMIN_ORDER_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const orderId = ctx.match[1];
      try {
        const order = await ctx.prisma.order.findUnique({ 
@@ -151,6 +160,7 @@ exports.setup = (bot) => {
   });
 
   bot.action(/^ADMIN_SETSTATUS_(.+?)_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const orderId = ctx.match[1];
      const status = ctx.match[2];
      try {
@@ -166,6 +176,7 @@ exports.setup = (bot) => {
   });
 
   bot.action(/^ADMIN_DELETEORDERBTN_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const orderId = ctx.match[1];
      const btns = [
        [Markup.button.callback('⚠️ YES, DELETE', `ADMIN_DELETEORDERCONFIRM_${orderId}`)],
@@ -175,6 +186,7 @@ exports.setup = (bot) => {
   });
 
   bot.action(/^ADMIN_DELETEORDERCONFIRM_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const orderId = ctx.match[1];
      try {
        await ctx.prisma.orderItem.deleteMany({ where: { orderId: orderId } });
@@ -190,6 +202,7 @@ exports.setup = (bot) => {
 
   
   bot.action(/^ADMIN_DELETEORDERBTN_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const orderId = ctx.match[1];
      const btns = [
        [Markup.button.callback('⚠️ YES, DELETE', `ADMIN_DELETEORDERCONFIRM_${orderId}`)],
@@ -199,6 +212,7 @@ exports.setup = (bot) => {
   });
 
   bot.action(/^ADMIN_DELETEORDERCONFIRM_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const orderId = ctx.match[1];
      try {
        await ctx.prisma.orderItem.deleteMany({ where: { orderId: orderId } });
@@ -213,6 +227,8 @@ exports.setup = (bot) => {
   });
 
 bot.action('ADMIN_PRODUCTS', async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
+     if (!(await isAdminCheck(ctx))) return;
      await ctx.editMessageText('🛍️ *Manage Products Dashboard*\nChoose an action:', {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
@@ -224,6 +240,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action('ADMIN_PRODUCT_ADD', async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      try {
        const categories = await ctx.prisma.category.findMany();
        if (categories.length === 0) {
@@ -236,12 +253,14 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action(/^ADMIN_ADDPRD_CAT_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      ctx.session.newProduct = { categoryId: ctx.match[1] };
      ctx.session.adminState = 'waitingForProductName';
      await ctx.editMessageText('Step 2: Enter the *Name* of the product.\n\n_Send /cancel to abort._', { parse_mode: 'Markdown' });
   });
 
   bot.action('ADMIN_PRODUCT_LIST', async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      try {
        const products = await ctx.prisma.product.findMany({ orderBy: { createdAt: 'desc' }, take: 25 });
        if (products.length === 0) return ctx.editMessageText('No products found.', Markup.inlineKeyboard([[Markup.button.callback('🔙 Back', 'ADMIN_PRODUCTS')]]));
@@ -253,6 +272,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action(/^ADMIN_MANAGEPRD_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const pId = ctx.match[1];
      try {
        const p = await ctx.prisma.product.findUnique({ where: { id: pId }});
@@ -275,6 +295,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action(/^ADMIN_EDITPRD_(.+)_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const field = ctx.match[1]; // NAME, DESC, PRICE, DISC, STOCK, IMG
      const pId = ctx.match[2];
      ctx.session.editProductId = pId;
@@ -288,6 +309,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action(/^ADMIN_TOGGLE(.*)_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const toggleType = ctx.match[1]; // FEAT, TREND
      const pId = ctx.match[2];
      try {
@@ -303,6 +325,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action(/^ADMIN_DELETEPRDBTN_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      const btns = [
        [Markup.button.callback('⚠️ YES, DELETE', `ADMIN_DELETEPRDCONFIRM_${ctx.match[1]}`)],
        [Markup.button.callback('❌ NO, CANCEL', `ADMIN_MANAGEPRD_${ctx.match[1]}`)]
@@ -311,6 +334,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action(/^ADMIN_DELETEPRDCONFIRM_(.+)$/, async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
      try {
        await ctx.prisma.product.delete({ where: { id: ctx.match[1] }});
        await ctx.answerCbQuery('✅ Product manually deleted from database!');
@@ -321,6 +345,7 @@ bot.action('ADMIN_PRODUCTS', async (ctx) => {
   });
 
   bot.action('ADMIN_BROADCAST', async (ctx) => {
+     ctx.answerCbQuery().catch(()=>{});
     ctx.session.waitingForBroadcast = true;
     await ctx.editMessageText('📢 *Global Broadcast System*\n\nPlease type the message you want to blast to **ALL** users who have activated the bot. \n\n_Send /cancel to safely abort._', { parse_mode: 'Markdown' });
   });
