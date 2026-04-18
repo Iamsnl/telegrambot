@@ -144,7 +144,8 @@ exports.setup = (bot) => {
        text += `🚦 *Current Status:* ${order.status}\n\n*Manifest:*\n`;
        
        order.orderItems.forEach(i => {
-         text += `- ${i.product.name} x${i.quantity}\n`;
+         const wStr = i.weightGrams ? ` (${i.weightGrams >= 1000 ? i.weightGrams/1000 + 'kg' : i.weightGrams + 'g'})` : '';
+         text += `- ${i.product.name}${wStr} x${i.quantity}\n`;
        });
        
        const buttons = [
